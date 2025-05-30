@@ -30,24 +30,10 @@ classdef PathFollowingRobot < handle
             
             % Load waypoints (example coordinates)
             obj.Waypoints = [
-            7.214908, 124.249291;  % ~3m (original 5m point adjusted)
-            7.214910, 124.249311;  % ~3m
-            7.214913, 124.249331;  % ~3m (original 5m point adjusted)
-            7.214916, 124.249351;  % ~3m
-            7.214918, 124.249371;  % ~3m
-            7.214921, 124.249391;  % ~3m (original 5m point adjusted)
-            7.214923, 124.249411;  % ~3m
-            7.214926, 124.249431;  % ~3m
-            7.214929, 124.249451;  % ~3m (original 5m point adjusted)
-            7.214931, 124.249471;  % ~3m
-            7.214934, 124.249491;  % ~3m
-            7.214936, 124.249511;  % ~3m (original 5m point adjusted)
-            7.214939, 124.249531;  % ~3m
-            7.214942, 124.249551;  % ~3m
-            7.214944, 124.249571;  % ~3m (original 5m point adjusted)
-            7.214947, 124.249591;  % ~3m
-            7.214949, 124.249611;  % ~3m
-            7.214952, 124.249631;  % ~3m 
+            7.214908, 124.249291;  % Start
+            7.214916, 124.249351;  % ~5m apart
+            7.214923, 124.249411;  % ~5m
+            7.214931, 124.249471;  % ~5m
             ];
             
             obj.CurrentWaypointIndex = 1;
