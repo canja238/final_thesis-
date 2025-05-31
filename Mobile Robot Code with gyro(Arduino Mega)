@@ -1,8 +1,10 @@
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 #include <Wire.h>
+#include <I2Cdev.h>
 #include <MPU6050.h>
 
+// Debug mode (comment out to disable)
 #define DEBUG
 
 #ifdef DEBUG
@@ -13,41 +15,48 @@
 #define DEBUG_PRINTLN(...)
 #endif
 
+// GPS and HC-12 Radio Setup
 TinyGPSPlus gps;
-MPU6050 mpu;
-#define GPS_SERIAL Serial1
-#define HC12_SERIAL Serial3
+#define GPS_SERIAL Serial1    // GPS on Serial1 (TX1/RX1)
+#define HC12_SERIAL Serial3   // HC-12 on Serial3 (TX3/RX3)
 
-// Motor control pins
-const int ENA = 12;    // Left motor PWM
-const int ENB = 13;    // Right motor PWM
-const int motorPin1 = 8;  // Left motor direction 1
-const int motorPin2 = 9;  // Left motor direction 2
+// MPU6050 IMU
+MPU6050 mpu;
+bool mpuInitialized = false;
+float accAngle, gyroAngle, currentAngle;
+float gyroError = 0;
+unsigned long prevTime = 0;
+
+// Motor Control Pins (L298N Driver)
+const int ENA = 12;      // Left motor PWM
+const int ENB = 13;      // Right motor PWM
+const int motorPin1 = 8; // Left motor direction 1
+const int motorPin2 = 9; // Left motor direction 2
 const int motorPin3 = 11; // Right motor direction 1
 const int motorPin4 = 10; // Right motor direction 2
 
-// MPU-6050 variables
-float accAngle, gyroAngle, currentAngle;
-unsigned long prevTime = 0;
-float gyroError = 0;
-bool mpuInitialized = false;
-
+// Motor Command Struct
 struct MotorCommand {
   int leftPWM;
   int rightPWM;
 };
 MotorCommand currentCommand = {0, 0};
+
+// Safety timeout (stop if no commands received)
 unsigned long lastCommandTime = 0;
 const unsigned long COMMAND_TIMEOUT = 2000; // 2 seconds
 
+// ====================== SETUP ======================
 void setup() {
   #ifdef DEBUG
   Serial.begin(115200);
+  DEBUG_PRINTLN("Initializing...");
   #endif
-  
+
+  // Initialize GPS and HC-12 serial
   GPS_SERIAL.begin(9600);
   HC12_SERIAL.begin(9600);
-  
+
   // Initialize motor control pins
   pinMode(ENA, OUTPUT);
   pinMode(ENB, OUTPUT);
@@ -55,33 +64,15 @@ void setup() {
   pinMode(motorPin2, OUTPUT);
   pinMode(motorPin3, OUTPUT);
   pinMode(motorPin4, OUTPUT);
-  
-  // Initialize MPU-6050
+
+  // Initialize MPU6050 IMU
   Wire.begin();
-  byte status = mpu.begin();
-  if (status == 0) {
-    DEBUG_PRINTLN("MPU6050 found!");
-    mpuInitialized = true;
-    
-    // Calibrate gyroscope
-    calibrateGyro();
-    
-    // Set accelerometer range (optional)
-    mpu.setAccelerometerRange(MPU6050_RANGE_2_G);
-    
-    // Set gyro range (optional)
-    mpu.setGyroRange(MPU6050_RANGE_250_DEG);
-    
-    // Set filter bandwidth (optional)
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  } else {
-    DEBUG_PRINTLN("MPU6050 not found!");
-    mpuInitialized = false;
-  }
-  
-  DEBUG_PRINTLN("Robot Initialized");
+  setupMPU6050();
+
+  DEBUG_PRINTLN("Robot Ready");
 }
 
+// ====================== MAIN LOOP ======================
 void loop() {
   // Read GPS data
   while (GPS_SERIAL.available() > 0) {
@@ -91,13 +82,13 @@ void loop() {
       }
     }
   }
-  
-  // Read and process MPU-6050 data if available
+
+  // Update IMU data if available
   if (mpuInitialized) {
     updateIMUData();
   }
-  
-  // Check for incoming commands
+
+  // Check for incoming motor commands
   if (HC12_SERIAL.available() > 0) {
     String command = HC12_SERIAL.readStringUntil('\n');
     if (command.startsWith("CMD:")) {
@@ -106,51 +97,76 @@ void loop() {
       lastCommandTime = millis();
     }
   }
-  
-  // Safety timeout - stop if no commands received
+
+  // Safety timeout (stop if no commands received)
   if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
     currentCommand = {0, 0};
     executeMotorCommand();
     DEBUG_PRINTLN("Command timeout - stopping");
   }
-  
-  delay(50);
+
+  delay(50); // Small delay to prevent CPU overload
+}
+
+// ====================== MPU6050 FUNCTIONS ======================
+void setupMPU6050() {
+  DEBUG_PRINTLN("Initializing MPU6050...");
+  mpu.initialize();
+
+  // Test connection
+  if (mpu.testConnection()) {
+    DEBUG_PRINTLN("MPU6050 connection successful");
+    mpuInitialized = true;
+
+    // Calibrate gyro
+    calibrateGyro();
+
+    // Configure IMU settings
+    mpu.setFullScaleGyroRange(MPU6050_GYRO_FS_250);
+    mpu.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+    mpu.setDLPFMode(MPU6050_DLPF_BW_20);
+  } else {
+    DEBUG_PRINTLN("MPU6050 connection failed");
+    mpuInitialized = false;
+  }
 }
 
 void calibrateGyro() {
-  DEBUG_PRINTLN("Calibrating MPU6050...");
-  
-  // Read 200 samples for calibration
+  DEBUG_PRINTLN("Calibrating gyro...");
+  int32_t gyroZSum = 0;
+
+  // Average 200 readings
   for (int i = 0; i < 200; i++) {
-    Vector rawGyro = mpu.readRawGyro();
-    gyroError += rawGyro.Z;
+    int16_t gx, gy, gz;
+    mpu.getRotation(&gx, &gy, &gz);
+    gyroZSum += gz;
     delay(10);
   }
-  
-  gyroError /= 200;
-  DEBUG_PRINT("Gyro error: ");
+
+  gyroError = gyroZSum / 200;
+  DEBUG_PRINT("Gyro Z error: ");
   DEBUG_PRINTLN(gyroError);
 }
 
 void updateIMUData() {
-  // Read accelerometer and gyroscope data
-  Vector rawAccel = mpu.readRawAccel();
-  Vector rawGyro = mpu.readRawGyro();
-  
+  // Read raw sensor data
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
   // Calculate time difference
   unsigned long currentTime = millis();
   float deltaTime = (currentTime - prevTime) / 1000.0;
   prevTime = currentTime;
-  
-  // Calculate tilt angle from accelerometer (pitch)
-  accAngle = atan2(rawAccel.Y, rawAccel.X) * 180/PI + 90;
-  
-  // Calculate angular speed from gyro (Z-axis for heading)
-  float gyroRate = (rawGyro.Z - gyroError) / 131.0; // Convert to deg/s
-  
-  // Complementary filter to combine accel and gyro data
+
+  // Calculate tilt angle from accelerometer
+  accAngle = atan2(ay, ax) * 180 / PI + 90;
+
+  // Calculate angular speed from gyro (Z-axis)
+  float gyroRate = (gz - gyroError) / 131.0; // Convert to deg/s
+
+  // Complementary filter for angle estimation
   currentAngle = 0.98 * (currentAngle + gyroRate * deltaTime) + 0.02 * accAngle;
-  
+
   #ifdef DEBUG
   static unsigned long lastPrint = 0;
   if (millis() - lastPrint > 500) {
@@ -165,23 +181,23 @@ void updateIMUData() {
   #endif
 }
 
+// ====================== GPS FUNCTIONS ======================
 void sendGPSData() {
   float latitude = gps.location.lat();
   float longitude = gps.location.lng();
   float speed = gps.speed.mps();
   float course = gps.course.deg();
-  
-  // If MPU is available, augment GPS heading with IMU data
+
+  // If IMU is available, fuse GPS and IMU data for better heading
   if (mpuInitialized) {
-    // Simple fusion - use GPS course when speed is sufficient, otherwise use IMU
-    if (speed > 0.5) { // 0.5 m/s threshold
-      // Weighted average between GPS and IMU
-      course = (course * 0.7) + (currentAngle * 0.3);
+    if (speed > 0.5) { // Use GPS when moving fast enough
+      course = (course * 0.7) + (currentAngle * 0.3); // Weighted average
     } else {
-      course = currentAngle;
+      course = currentAngle; // Use IMU when stationary/slow
     }
   }
-  
+
+  // Send data to HC-12 (base station)
   HC12_SERIAL.print("GPS:");
   HC12_SERIAL.print(latitude, 6);
   HC12_SERIAL.print(",");
@@ -190,15 +206,18 @@ void sendGPSData() {
   HC12_SERIAL.print(speed, 2);
   HC12_SERIAL.print(",");
   HC12_SERIAL.println(course, 2);
-  
+
+  #ifdef DEBUG
   DEBUG_PRINT("GPS: ");
   DEBUG_PRINT(latitude, 6);
   DEBUG_PRINT(", ");
   DEBUG_PRINT(longitude, 6);
   DEBUG_PRINT(" | Heading: ");
   DEBUG_PRINTLN(course);
+  #endif
 }
 
+// ====================== MOTOR CONTROL ======================
 void parseMotorCommand(String command) {
   int commaIndex = command.indexOf(',', 4);
   if (commaIndex != -1) {
@@ -208,7 +227,7 @@ void parseMotorCommand(String command) {
 }
 
 void executeMotorCommand() {
-  // Left motor
+  // Left motor control
   if (currentCommand.leftPWM > 0) {
     digitalWrite(motorPin1, LOW);
     digitalWrite(motorPin2, HIGH);
@@ -217,10 +236,10 @@ void executeMotorCommand() {
     digitalWrite(motorPin2, LOW);
   } else {
     digitalWrite(motorPin1, HIGH);
-    digitalWrite(motorPin2, HIGH);
+    digitalWrite(motorPin2, HIGH); // Brake
   }
-  
-  // Right motor
+
+  // Right motor control
   if (currentCommand.rightPWM > 0) {
     digitalWrite(motorPin3, LOW);
     digitalWrite(motorPin4, HIGH);
@@ -229,17 +248,17 @@ void executeMotorCommand() {
     digitalWrite(motorPin4, LOW);
   } else {
     digitalWrite(motorPin3, HIGH);
-    digitalWrite(motorPin4, LOW);
+    digitalWrite(motorPin4, HIGH); // Brake
   }
-  
+
+  // Apply PWM (0-255)
   analogWrite(ENA, constrain(abs(currentCommand.leftPWM) * 2.55, 0, 255));
   analogWrite(ENB, constrain(abs(currentCommand.rightPWM) * 2.55, 0, 255));
-  
+
+  #ifdef DEBUG
   DEBUG_PRINT("Motors: L=");
   DEBUG_PRINT(currentCommand.leftPWM);
   DEBUG_PRINT(", R=");
   DEBUG_PRINTLN(currentCommand.rightPWM);
+  #endif
 }
-
-//MPU-6050 SDA	20	I2C Data
-//MPU-6050 SCL	21	I2C Clock
