@@ -93,49 +93,92 @@ classdef PathFollowingRobot < handle
             fclose(fid);
         end
         
-        function initializeFuzzySystem(obj)
-            fis = mamfis('Name', 'path_following');
-            
-            % Input 1: Cross-track error (meters)
-            fis = addInput(fis, [-5 5], 'Name', 'cross_track_error'); % Reduced range
-            fis = addMF(fis, 'cross_track_error', 'trapmf', [-5 -5 -2 -1], 'Name', 'Left');
-            fis = addMF(fis, 'cross_track_error', 'trimf', [-1 0 1], 'Name', 'Center');
-            fis = addMF(fis, 'cross_track_error', 'trapmf', [1 2 5 5], 'Name', 'Right');
-            
-            % Improved Input 2: Heading error (degrees)
-            fis = addInput(fis, [-90 90], 'Name', 'heading_error'); % Reduced range
-            fis = addMF(fis, 'heading_error', 'trapmf', [-90 -90 -30 -15], 'Name', 'Left');
-            fis = addMF(fis, 'heading_error', 'trimf', [-15 0 15], 'Name', 'Straight');
-            fis = addMF(fis, 'heading_error', 'trapmf', [15 30 90 90], 'Name', 'Right');
-            
-            % Normalized Outputs (-100 to 100)
-            fis = addOutput(fis, [-100 100], 'Name', 'pwm_left');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-100 -100 -50], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_left', 'trimf', [-60 0 60], 'Name', 'Slow');
-            fis = addMF(fis, 'pwm_left', 'trimf', [50 100 100], 'Name', 'Forward');
-            
-            fis = addOutput(fis, [-100 100], 'Name', 'pwm_right');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-100 -100 -50], 'Name', 'Reverse');
-            fis = addMF(fis, 'pwm_right', 'trimf', [-60 0 60], 'Name', 'Slow');
-            fis = addMF(fis, 'pwm_right', 'trimf', [50 100 100], 'Name', 'Forward');
-            % Rule Base
-            ruleList = [
-                1 1 3 1 1 1;   % Far left, heading left -> strong right turn
-                1 2 3 2 1 1;   % Far left, straight -> medium right turn
-                1 3 3 3 1 1;   % Far left, heading right -> gentle right turn
-                
-                2 1 2 1 1 1;   % Slightly left, heading left -> gentle right turn
-                2 2 3 3 1 1;   % On path, straight -> go straight
-                2 3 1 2 1 1;   % Slightly left, heading right -> gentle left turn
-                
-                3 1 1 1 1 1;   % Far right, heading left -> gentle left turn
-                3 2 2 3 1 1;   % Far right, straight -> medium left turn
-                3 3 1 3 1 1;   % Far right, heading right -> strong left turn
-            ];
-            
-            fis = addRule(fis, ruleList);
-            obj.FuzzySystem = fis;
-        end
+       function initializeFuzzySystem(obj)
+    fis = mamfis('Name', 'path_following');
+    
+    % Input 1: Cross-track error (meters) - Triangular
+    fis = addInput(fis, [-5 5], 'Name', 'cross_track_error');
+    fis = addMF(fis, 'cross_track_error', 'trimf', [-5 -3.5 -2], 'Name', 'Left');
+    fis = addMF(fis, 'cross_track_error', 'trimf', [-2 0 2], 'Name', 'Center');
+    fis = addMF(fis, 'cross_track_error', 'trimf', [2 3.5 5], 'Name', 'Right');
+    
+    % Input 2: Heading error (degrees) - Triangular
+    fis = addInput(fis, [-90 90], 'Name', 'heading_error');
+    fis = addMF(fis, 'heading_error', 'trimf', [-90 -60 -30], 'Name', 'Left');
+    fis = addMF(fis, 'heading_error', 'trimf', [-30 0 30], 'Name', 'Straight');
+    fis = addMF(fis, 'heading_error', 'trimf', [30 60 90], 'Name', 'Right');
+    
+    % Outputs: PWM values (0-255) - Triangular
+    fis = addOutput(fis, [0 255], 'Name', 'pwm_left');
+    fis = addMF(fis, 'pwm_left', 'trimf', [0 64 128], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_left', 'trimf', [64 128 192], 'Name', 'Medium');
+    fis = addMF(fis, 'pwm_left', 'trimf', [128 192 255], 'Name', 'Fast');
+    
+    fis = addOutput(fis, [0 255], 'Name', 'pwm_right');
+    fis = addMF(fis, 'pwm_right', 'trimf', [0 64 128], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_right', 'trimf', [64 128 192], 'Name', 'Medium');
+    fis = addMF(fis, 'pwm_right', 'trimf', [128 192 255], 'Name', 'Fast');
+    
+    % Rule Base (adjusted for 0-255 range)
+    ruleList = [
+        1 1 3 1 1 1;   % Far left, heading left -> right motor fast, left slow
+        1 2 3 2 1 1;   % Far left, straight -> right medium, left slow
+        1 3 3 3 1 1;   % Far left, heading right -> right medium, left slow
+        
+        2 1 2 1 1 1;   % Slightly left, heading left -> right medium, left slow
+        2 2 3 3 1 1;   % On path, straight -> both medium
+        2 3 1 2 1 1;   % Slightly left, heading right -> left medium, right slow
+        
+        3 1 1 1 1 1;   % Far right, heading left -> left fast, right slow
+        3 2 2 3 1 1;   % Far right, straight -> left medium, right slow
+        3 3 1 3 1 1;   % Far right, heading right -> left fast, right slow
+    ];
+    
+    fis = addRule(fis, ruleList);
+    obj.FuzzySystem = fis;
+    
+    % Plot membership functions
+    figure;
+    subplot(2,2,1);
+        plotmf(fis, 'input', 1);
+        title('Cross-track Error');
+        xlabel('Error (m)');
+        ylabel('Membership');
+        
+    subplot(2,2,2);
+        plotmf(fis, 'input', 2);
+        title('Heading Error');
+        xlabel('Error (deg)');
+        ylabel('Membership');
+        
+    subplot(2,2,3);
+        plotmf(fis, 'output', 1);
+        title('Left PWM (0-255)');
+        xlabel('PWM Value');
+        ylabel('Membership');
+        
+    subplot(2,2,4);
+        plotmf(fis, 'output', 2);
+        title('Right PWM (0-255)');
+        xlabel('PWM Value');
+        ylabel('Membership');
+    
+    % Plot surface views
+    figure;
+    subplot(1,2,1);
+        gensurf(fis, [1 2], 1);
+        title('Left PWM Response');
+        xlabel('Cross-track Error');
+        ylabel('Heading Error');
+        zlabel('PWM (0-255)');
+        
+    subplot(1,2,2);
+        gensurf(fis, [1 2], 2);
+        title('Right PWM Response');
+        xlabel('Cross-track Error');
+        ylabel('Heading Error');
+        zlabel('PWM (0-255)');
+end
         
         function initializeMap(obj)
             obj.MapFigure = figure('Name', 'Robot Path Monitoring', 'NumberTitle', 'off');
